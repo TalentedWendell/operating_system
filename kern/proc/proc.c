@@ -49,7 +49,8 @@
 #include <vnode.h>
 #include <vfs.h>
 #include <synch.h>
-#include <kern/fcntl.h>  
+#include <kern/fcntl.h>
+#include "opt-A2.h"
 
 /*
  * The process for the kernel; this holds all the kernel-only threads.
@@ -69,8 +70,10 @@ static struct semaphore *proc_count_mutex;
 struct semaphore *no_proc_sem;   
 #endif  // UW
 
-
-
+#if OPT_A2
+static pid_t curpid;
+static struct lock *lock_pid = NULL;
+#endif
 /*
  * Create a proc structure.
  */
@@ -78,6 +81,7 @@ static
 struct proc *
 proc_create(const char *name)
 {
+
 	struct proc *proc;
 
 	proc = kmalloc(sizeof(*proc));
@@ -102,7 +106,31 @@ proc_create(const char *name)
 #ifdef UW
 	proc->console = NULL;
 #endif // UW
+#if OPT_A2
+    if(lock_pid == NULL){
+        proc->pid = curpid;
+        curpid++;
+        lock_pid = lock_create("lock_pid");
+    } else {
+        lock_acquire(lock_pid);
+        proc->pid = curpid;
+        curpid++;
+        lock_release(lock_pid);
+    }
+    proc->zomchildren = array_create();
+    proc->zomlock = lock_create("zomlock");
+    //lock_acquire(lock_pid);
+    //proc->pid = curpid;
+    //curpid++;
+    //lock_release(lock_pid);
+    
+    proc->myparent = cv_create("myparent");
+    proc->lock_parent = lock_create("lock_parent");
+    proc->parent = NULL;
+    proc->children = array_create();
+    //proc->mytp = NULL;
 
+#endif
 	return proc;
 }
 
@@ -162,7 +190,41 @@ proc_destroy(struct proc *proc)
 	  vfs_close(proc->console);
 	}
 #endif // UW
-
+#if OPT_A2
+    lock_acquire(proc->lock_parent);
+    lock_acquire(proc->zomlock);
+    while(array_num(proc->children) != 0){
+          struct proc *child = array_get(proc->children, 0);
+          child->parent = NULL;
+          array_remove(proc->children, 0);
+    }
+    //for(unsigned int i = 0; i < array_num(proc->children); i++){
+    //    struct proc *child = array_get(proc->children, i);
+    //    child->parent = NULL;
+    //    array_remove(proc->children, i);
+    //}
+    array_destroy(proc->children);
+    while(array_num(proc->zomchildren) != 0){
+          struct zombie *curzom = array_get(proc->zomchildren, 0);
+          kfree(curzom);
+          array_remove(proc->zomchildren, 0);
+    }
+    //cv_destroy(proc->myparent);
+    //lock_destroy(proc->lock_parent);
+    //lock_acquire(proc->zomlock);
+    //for(unsigned int j = 0; j < array_num(proc->zomchildren); j++){
+    //    struct zombie *curzom = array_get(proc->zomchildren, j);
+    //    kfree(curzom);
+    //    kprintf("%d", array_num(proc->zomchildren));
+    //    array_remove(proc->zomchildren, j);
+    //}
+    array_destroy(proc->zomchildren);
+    lock_release(proc->zomlock);
+    lock_release(proc->lock_parent);
+    cv_destroy(proc->myparent);
+    lock_destroy(proc->lock_parent);
+    lock_destroy(proc->zomlock);
+#endif
 	threadarray_cleanup(&proc->p_threads);
 	spinlock_cleanup(&proc->p_lock);
 
@@ -193,10 +255,14 @@ proc_destroy(struct proc *proc)
 void
 proc_bootstrap(void)
 {
+#if OPT_A2
+    curpid = 1;
+#endif
   kproc = proc_create("[kernel]");
   if (kproc == NULL) {
     panic("proc_create for kproc failed\n");
   }
+  //lock_pid = lock_create("lock_pid");
 #ifdef UW
   proc_count = 0;
   proc_count_mutex = sem_create("proc_count_mutex",1);

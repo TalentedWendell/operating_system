@@ -44,6 +44,8 @@
 #include <vfs.h>
 #include <syscall.h>
 #include <test.h>
+#include "opt-A2.h"
+#include <copyinout.h>
 
 /*
  * Load program "progname" and start running it in usermode.
@@ -52,7 +54,11 @@
  * Calls vfs_open on progname and thus may destroy it.
  */
 int
+#if OPT_A2
+runprogram(char *progname, unsigned long nargs, char** args)
+#else 
 runprogram(char *progname)
+#endif
 {
 	struct addrspace *as;
 	struct vnode *v;
@@ -76,7 +82,7 @@ runprogram(char *progname)
 	}
 
 	/* Switch to it and activate it. */
-	curproc_setas(as);
+	struct addrspace *pre_as = curproc_setas(as);
 	as_activate();
 
 	/* Load the executable. */
@@ -96,10 +102,43 @@ runprogram(char *progname)
 		/* p_addrspace will go away when curproc is destroyed */
 		return result;
 	}
+#if OPT_A2
+    //passing the arguments to the process
+    int asize = (int)nargs;
+    size_t got;
+    char** sargs = kmalloc((asize + 1) * sizeof(char*));
+    KASSERT(sargs != NULL);
 
+    sargs[asize] = NULL;
+    for(int i = (asize - 1); i >= 0; i--){
+        size_t singlelen = ROUNDUP(strlen(args[i]) + 1, 4);
+        //kprintf(args[i]);
+        //kprintf(i);
+        size_t singlesize = singlelen * sizeof(char);
+        stackptr -= singlesize;
+        result = copyoutstr((void*) args[i], (userptr_t) stackptr, strlen(args[i]) + 1, &got);
+        if(result){
+            return result;
+        }
+        sargs[i] = (char*)stackptr;
+    }
+    size_t psize = sizeof(char*);
+
+    for(int i = asize; i >= 0; i--){
+        stackptr -= psize;
+        result = copyout((void*) &sargs[i], (userptr_t) stackptr, psize);
+        if(result){
+            return result;
+        }
+    }
+    //kfree(sargs);
+    enter_new_process(asize, (userptr_t) stackptr, stackptr, entrypoint);
+    as_destroy(pre_as);
+#else
 	/* Warp to user mode. */
 	enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,
 			  stackptr, entrypoint);
+#endif
 	
 	/* enter_new_process does not return. */
 	panic("enter_new_process returned\n");

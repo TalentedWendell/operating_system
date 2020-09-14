@@ -38,6 +38,8 @@
 
 #include <spinlock.h>
 #include <thread.h> /* required for struct threadarray */
+#include "opt-A2.h"
+#include <synch.h>
 
 struct addrspace;
 struct vnode;
@@ -48,11 +50,29 @@ struct semaphore;
 /*
  * Process structure.
  */
+#if OPT_A2
+struct zombie{
+    pid_t pid;
+    int exit_code;
+};
+#endif
+
 struct proc {
 	char *p_name;			/* Name of this process */
 	struct spinlock p_lock;		/* Lock for this structure */
 	struct threadarray p_threads;	/* Threads in this process */
-
+#if OPT_A2
+    //for parent-child relationship
+    struct cv *myparent;
+    struct proc *parent;
+    struct array *children;
+    struct lock *lock_parent; 
+    struct array *zomchildren;
+    struct lock *zomlock;
+    //for missing identity
+    pid_t pid;
+    //struct trapframe *mytp;
+#endif
 	/* VM */
 	struct addrspace *p_addrspace;	/* virtual address space */
 
